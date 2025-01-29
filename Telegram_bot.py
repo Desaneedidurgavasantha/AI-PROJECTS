@@ -8,6 +8,273 @@ from io import StringIO
 TELEGRAM_BOT_TOKEN="7791553696:AAGdUzXVfRrlucGskWP8MOpF4i0OPfry55g"
 GEMINI_API_KEY="AIzaSyBFuB9e4U1pNP9k9kCPOoiUgw31pO72Iw8"
 MONGODB_URI="mongodb://localhost:27017/Durgavasanta"
+
+import logging
+import os
+import uuid
+
+from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, InputMediaPhoto, InputMediaDocument
+from telegram.ext import (
+    Updater,
+    CommandHandler,
+    MessageHandler,
+    Filters,
+    CallbackContext,
+    ConversationHandler,
+)
+from db import DatabaseManager
+from gemini_utils import chat_with_gemini, analyze_image
+from config import TELEGRAM_BOT_TOKEN
+from search_utils import search_web
+
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
+)
+
+logger = logging.getLogger(__name__)
+
+# Conversation states
+PHONE_NUMBER = 1
+SEARCH_QUERY = 2
+FILE_ANALYSIS = 3
+
+
+def start(update: Update, context: CallbackContext):
+    chat_id = update.effective_chat.id
+    first_name = update.effective_user.first_name
+    username = update.effective_user.username
+    db = DatabaseManager()
+    if db.register_user(first_name, username, chat_id):
+        keyboard = [[KeyboardButton("Share Phone Number", request_contact=True)]]
+        reply_markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=True)
+        update.message.reply_text(
+            "Welcome! Please share your phone number.", reply_markup=reply_markup
+        )
+    else:
+        update.message.reply_text("Welcome back!")
+
+def handle_contact(update: Update, context: CallbackContext):
+    phone_number = update.message.contact.phone_number
+    chat_id = update.effective_chat.id
+    db = DatabaseManager()
+    db.update_user_phone(chat_id, phone_number)
+    update.message.reply_text("Thank you, your phone number has been saved.")
+
+def chat_handler(update: Update, context: CallbackContext):
+    user_input = update.message.text
+    chat_id = update.effective_chat.id
+    db = DatabaseManager()
+    response = chat_with_gemini(user_input)
+    db.save_chat_history(chat_id, "user", user_input)
+    db.save_chat_history(chat_id, "bot", response)
+    update.message.reply_text(response)
+
+
+def start_web_search(update: Update, context: CallbackContext):
+    update.message.reply_text("Enter your search query:")
+    return SEARCH_QUERY
+
+def handle_web_search(update: Update, context: CallbackContext):
+    query = update.message.text
+    response = search_web(query)
+    update.message.reply_text(response)
+    return ConversationHandler.END
+
+def file_handler(update: Update, context: CallbackContext):
+    chat_id = update.effective_chat.id
+    db = DatabaseManager()
+    file = None
+    file_id = None
+    file_name = None
+    if update.message.photo:
+        file = update.message.photo[-1]
+        file_id = file.file_id
+        file_name = f"{uuid.uuid4().hex}.jpg"
+    elif update.message.document:
+        file = update.message.document
+        file_id = file.file_id
+        file_name = file.file_name
+
+    if file:
+        file_obj = context.bot.get_file(file_id)
+        file_path = os.path.join("files",file_name)
+        os.makedirs("files",exist_ok=True)
+        file_obj.download(file_path)
+        analysis = analyze_image(file_path)
+        db.save_file_metadata(chat_id, file_name, analysis)
+        update.message.reply_text(analysis)
+        return ConversationHandler.END
+    else:
+        update.message.reply_text("Unsupported file type")
+
+
+def main():
+    updater = Updater(TELEGRAM_BOT_TOKEN)
+    dispatcher = updater.dispatcher
+
+    dispatcher.add_handler(CommandHandler("start", start))
+    dispatcher.add_handler(MessageHandler(Filters.contact, handle_contact))
+
+    # Web search conversation handler
+    web_search_handler = ConversationHandler(
+        entry_points=[CommandHandler("websearch", start_web_search)],
+        states={
+            SEARCH_QUERY: [MessageHandler(Filters.text & ~Filters.command, handle_web_search)],
+        },
+        fallbacks=[],
+    )
+
+    dispatcher.add_handler(web_search_handler)
+
+    #File analysis conversation handler
+    file_analysis_handler = ConversationHandler(
+        entry_points=[MessageHandler(Filters.photo | Filters.document, file_handler)],
+        states={},
+        fallbacks=[]
+    )
+    dispatcher.add_handler(file_analysis_handler)
+
+    dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, chat_handler))
+
+    updater.start_polling()
+    updater.idle()
+
+
+if __name__ == "__main__":
+    main()
+import logging
+import os
+import uuid
+
+from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, InputMediaPhoto, InputMediaDocument
+from telegram.ext import (
+    Updater,
+    CommandHandler,
+    MessageHandler,
+    Filters,
+    CallbackContext,
+    ConversationHandler,
+)
+from db import DatabaseManager
+from gemini_utils import chat_with_gemini, analyze_image
+from config import TELEGRAM_BOT_TOKEN
+from search_utils import search_web
+
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
+)
+
+logger = logging.getLogger(__name__)
+
+# Conversation states
+PHONE_NUMBER = 1
+SEARCH_QUERY = 2
+FILE_ANALYSIS = 3
+
+
+def start(update: Update, context: CallbackContext):
+    chat_id = update.effective_chat.id
+    first_name = update.effective_user.first_name
+    username = update.effective_user.username
+    db = DatabaseManager()
+    if db.register_user(first_name, username, chat_id):
+        keyboard = [[KeyboardButton("Share Phone Number", request_contact=True)]]
+        reply_markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=True)
+        update.message.reply_text(
+            "Welcome! Please share your phone number.", reply_markup=reply_markup
+        )
+    else:
+        update.message.reply_text("Welcome back!")
+
+def handle_contact(update: Update, context: CallbackContext):
+    phone_number = update.message.contact.phone_number
+    chat_id = update.effective_chat.id
+    db = DatabaseManager()
+    db.update_user_phone(chat_id, phone_number)
+    update.message.reply_text("Thank you, your phone number has been saved.")
+
+def chat_handler(update: Update, context: CallbackContext):
+    user_input = update.message.text
+    chat_id = update.effective_chat.id
+    db = DatabaseManager()
+    response = chat_with_gemini(user_input)
+    db.save_chat_history(chat_id, "user", user_input)
+    db.save_chat_history(chat_id, "bot", response)
+    update.message.reply_text(response)
+
+
+def start_web_search(update: Update, context: CallbackContext):
+    update.message.reply_text("Enter your search query:")
+    return SEARCH_QUERY
+
+def handle_web_search(update: Update, context: CallbackContext):
+    query = update.message.text
+    response = search_web(query)
+    update.message.reply_text(response)
+    return ConversationHandler.END
+
+def file_handler(update: Update, context: CallbackContext):
+    chat_id = update.effective_chat.id
+    db = DatabaseManager()
+    file = None
+    file_id = None
+    file_name = None
+    if update.message.photo:
+        file = update.message.photo[-1]
+        file_id = file.file_id
+        file_name = f"{uuid.uuid4().hex}.jpg"
+    elif update.message.document:
+        file = update.message.document
+        file_id = file.file_id
+        file_name = file.file_name
+
+    if file:
+        file_obj = context.bot.get_file(file_id)
+        file_path = os.path.join("files",file_name)
+        os.makedirs("files",exist_ok=True)
+        file_obj.download(file_path)
+        analysis = analyze_image(file_path)
+        db.save_file_metadata(chat_id, file_name, analysis)
+        update.message.reply_text(analysis)
+        return ConversationHandler.END
+    else:
+        update.message.reply_text("Unsupported file type")
+
+
+def main():
+    updater = Updater(TELEGRAM_BOT_TOKEN)
+    dispatcher = updater.dispatcher
+
+    dispatcher.add_handler(CommandHandler("start", start))
+    dispatcher.add_handler(MessageHandler(Filters.contact, handle_contact))
+
+    # Web search conversation handler
+    web_search_handler = ConversationHandler(
+        entry_points=[CommandHandler("websearch", start_web_search)],
+        states={
+            SEARCH_QUERY: [MessageHandler(Filters.text & ~Filters.command, handle_web_search)],
+        },
+        fallbacks=[],
+    )
+
+    dispatcher.add_handler(web_search_handler)
+
+    #File analysis conversation handler
+    file_analysis_handler = ConversationHandler(
+        entry_points=[MessageHandler(Filters.photo | Filters.document, file_handler)],
+        states={},
+        fallbacks=[]
+    )
+    dispatcher.add_handler(file_analysis_handler)
+
+    dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, chat_handler))
+
+    updater.start_polling()
+    updater.idle()
+
+
+if __name__ == "__main__":
+    main()
 MONGODB_DB_NAME="Durga Vasanta"
 
 
@@ -35,7 +302,7 @@ import sys
    class DatabaseManager:
        def __init__(self):
            self.client = MongoClient(MONGODB_URI)
-           self.db = self.client[MONGODB_DB_NAME]
+           self.db = self.client[Durga vasanta]
            self.users = self.db.users
            self.chats = self.db.chats
            self.files = self.db.files
